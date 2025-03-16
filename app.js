@@ -28,12 +28,21 @@ class App {
         this.scene.background = new THREE.Color(0x87ceeb); // Sky blue
         this.scene.fog = new THREE.FogExp2(0x87ceeb, 0.0025);
         
-        this.renderer = new THREE.WebGLRenderer({ antialias: true });
+        // Enable WebGL debugging
+        this.renderer = new THREE.WebGLRenderer({ 
+            antialias: true,
+            powerPreference: "high-performance"
+        });
         this.renderer.setPixelRatio(window.devicePixelRatio);
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         document.body.appendChild(this.renderer.domElement);
+        
+        // Log WebGL capabilities
+        const gl = this.renderer.getContext();
+        console.log("WebGL Version:", gl.getParameter(gl.VERSION));
+        console.log("WebGL Renderer:", gl.getParameter(gl.RENDERER));
         
         this.clock = new THREE.Clock();
         this.moveForward = false;
@@ -201,4 +210,3 @@ class App {
 window.addEventListener('load', () => {
     new App();
 });
-
