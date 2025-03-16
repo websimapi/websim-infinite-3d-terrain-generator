@@ -149,69 +149,70 @@ export class TerrainChunkManager {
     }
     
     async getChunkTexture(chunkX, chunkZ) {
-        // Use the AI to generate a texture based on the chunk location and terrain type
+        // Determine terrain type for this chunk
+        const terrainType = this.determineTerrainType(chunkX, chunkZ);
+        const worldX = chunkX * this.chunkSize;
+        const worldZ = chunkZ * this.chunkSize;
+        
+        // Generate a prompt for the AI texture based on terrain type
         const prompt = this.generateTexturePrompt(chunkX, chunkZ);
         
         try {
-            // Generate an AI image texture for the terrain
-            const imageUrl = await this.generateAIImage(prompt);
-            
-            if (imageUrl) {
-                return this.loadTextureFromUrl(imageUrl);
-            } else {
-                return this.createTerrainTexture(this.determineTerrainType(chunkX, chunkZ), chunkX * this.chunkSize, chunkZ * this.chunkSize);
-            }
-        } catch (error) {
-            // Fallback texture if the AI generation fails
-            console.error("Error generating texture:", error);
-            return this.createTerrainTexture(this.determineTerrainType(chunkX, chunkZ), chunkX * this.chunkSize, chunkZ * this.chunkSize);
-        }
-    }
-    
-    async generateAIImage(prompt) {
-        try {
-            // Use the LLM to generate an image
+            // Generate AI image texture using websim.imageGen
             const result = await websim.imageGen({
                 prompt: prompt,
                 aspect_ratio: "1:1",
-                seed: Math.floor(Math.random() * 1000)
+                seed: (chunkX * 13 + chunkZ * 17) % 1000 // Consistent seed per chunk
             });
             
-            return result.url;
+            if (result && result.url) {
+                // Load the texture from the generated image URL
+                return await this.loadTextureFromUrl(result.url);
+            } else {
+                console.warn("AI image generation returned no URL, using fallback texture");
+                return this.createTerrainTexture(terrainType, worldX, worldZ);
+            }
         } catch (error) {
-            console.error("Error generating AI image:", error);
-            return null;
+            console.error("Error generating AI texture:", error);
+            return this.createTerrainTexture(terrainType, worldX, worldZ);
         }
     }
     
     async loadTextureFromUrl(url) {
-        try {
-            // Use a CORS proxy to avoid cross-origin issues
-            const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+        return new Promise((resolve) => {
+            const textureLoader = new THREE.TextureLoader();
+            textureLoader.crossOrigin = 'anonymous';
             
-            return new Promise((resolve, reject) => {
-                const textureLoader = new THREE.TextureLoader();
-                textureLoader.crossOrigin = 'anonymous';
-                
-                textureLoader.load(
-                    proxyUrl,
-                    (texture) => {
-                        texture.wrapS = THREE.RepeatWrapping;
-                        texture.wrapT = THREE.RepeatWrapping;
-                        resolve(texture);
-                    },
-                    undefined,
-                    (error) => {
-                        console.error('Error loading texture:', error);
-                        // Fallback to procedural texture
-                        resolve(this.generateFallbackTexture());
-                    }
-                );
-            });
-        } catch (error) {
-            console.error("Error loading texture:", error);
-            return this.generateFallbackTexture();
-        }
+            // Try to load the image directly first
+            textureLoader.load(
+                url,
+                (texture) => {
+                    texture.wrapS = THREE.RepeatWrapping;
+                    texture.wrapT = THREE.RepeatWrapping;
+                    resolve(texture);
+                },
+                undefined,
+                (error) => {
+                    console.warn("Direct texture load failed, trying CORS proxy:", error);
+                    // Try with CORS proxy
+                    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+                    textureLoader.load(
+                        proxyUrl,
+                        (texture) => {
+                            texture.wrapS = THREE.RepeatWrapping;
+                            texture.wrapT = THREE.RepeatWrapping;
+                            resolve(texture);
+                        },
+                        undefined,
+                        (proxyError) => {
+                            console.error("CORS proxy texture load failed:", proxyError);
+                            // Last resort - use procedural texture
+                            resolve(this.generateFallbackTexture());
+                        }
+                    );
+                }
+            );
+        });
     }
     
     determineTerrainType(chunkX, chunkZ) {
