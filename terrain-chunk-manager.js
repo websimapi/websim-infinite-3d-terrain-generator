@@ -153,22 +153,73 @@ export class TerrainChunkManager {
         const prompt = this.generateTexturePrompt(chunkX, chunkZ);
         
         try {
-            // Ask the LLM for a color palette first to provide consistency
-            const result = await this.generateTexture(chunkX, chunkZ);
-            return result;
+            // Generate an AI image texture for the terrain
+            const imageUrl = await this.generateAIImage(prompt);
+            
+            if (imageUrl) {
+                return this.loadTextureFromUrl(imageUrl);
+            } else {
+                return this.createTerrainTexture(this.determineTerrainType(chunkX, chunkZ), chunkX * this.chunkSize, chunkZ * this.chunkSize);
+            }
         } catch (error) {
             // Fallback texture if the AI generation fails
             console.error("Error generating texture:", error);
+            return this.createTerrainTexture(this.determineTerrainType(chunkX, chunkZ), chunkX * this.chunkSize, chunkZ * this.chunkSize);
+        }
+    }
+    
+    async generateAIImage(prompt) {
+        try {
+            // Use the LLM to generate an image
+            const result = await websim.imageGen({
+                prompt: prompt,
+                aspect_ratio: "1:1",
+                seed: Math.floor(Math.random() * 1000)
+            });
+            
+            return result.url;
+        } catch (error) {
+            console.error("Error generating AI image:", error);
+            return null;
+        }
+    }
+    
+    async loadTextureFromUrl(url) {
+        try {
+            // Use a CORS proxy to avoid cross-origin issues
+            const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+            
+            return new Promise((resolve, reject) => {
+                const textureLoader = new THREE.TextureLoader();
+                textureLoader.crossOrigin = 'anonymous';
+                
+                textureLoader.load(
+                    proxyUrl,
+                    (texture) => {
+                        texture.wrapS = THREE.RepeatWrapping;
+                        texture.wrapT = THREE.RepeatWrapping;
+                        resolve(texture);
+                    },
+                    undefined,
+                    (error) => {
+                        console.error('Error loading texture:', error);
+                        // Fallback to procedural texture
+                        resolve(this.generateFallbackTexture());
+                    }
+                );
+            });
+        } catch (error) {
+            console.error("Error loading texture:", error);
             return this.generateFallbackTexture();
         }
     }
     
-    async generateTexture(chunkX, chunkZ) {
-        // Sample a few heights to determine terrain type
+    determineTerrainType(chunkX, chunkZ) {
+        // Sample heights to determine terrain type
         const worldX = chunkX * this.chunkSize;
         const worldZ = chunkZ * this.chunkSize;
         
-        // Sample heights at different points in the chunk
+        // Sample height at the center of the chunk
         const center = this.noiseGenerator.getHeightAt(worldX + this.chunkSize/2, worldZ + this.chunkSize/2);
         const minHeight = this.noiseGenerator.minHeight;
         const maxHeight = this.noiseGenerator.maxHeight;
@@ -182,8 +233,34 @@ export class TerrainChunkManager {
             terrainType = 'rock';
         }
         
-        // Generate the texture using SVG
-        return this.createTerrainTexture(terrainType, worldX, worldZ);
+        return terrainType;
+    }
+    
+    generateTexturePrompt(chunkX, chunkZ) {
+        // This creates a prompt for an AI to generate a texture
+        // Based on the chunk location and terrain type
+        const terrainType = this.determineTerrainType(chunkX, chunkZ);
+        
+        // Create a more detailed prompt based on terrain type
+        let prompt = "";
+        
+        if (terrainType === 'sand') {
+            prompt = `A top-down seamless sand texture with some small rocks and subtle ripples. Light tan color with natural variations.`;
+        } else if (terrainType === 'grass') {
+            prompt = `A top-down seamless grass texture with small flowers and varying shades of green. Natural ground cover texture from above.`;
+        } else if (terrainType === 'rock') {
+            prompt = `A top-down seamless rocky mountain terrain texture with cracks and variations in gray stone. Natural mountainous surface from above.`;
+        }
+        
+        // Add some randomization based on chunk coordinates
+        const seed = (chunkX * 13 + chunkZ * 17) % 5;
+        if (seed === 0) prompt += " More densely packed.";
+        if (seed === 1) prompt += " More sparse pattern.";
+        if (seed === 2) prompt += " Slightly darker shades.";
+        if (seed === 3) prompt += " Slightly lighter shades.";
+        if (seed === 4) prompt += " With more color variations.";
+        
+        return prompt;
     }
     
     createTerrainTexture(terrainType, worldX, worldZ) {
@@ -283,27 +360,6 @@ export class TerrainChunkManager {
         return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
     }
     
-    generateTexturePrompt(chunkX, chunkZ) {
-        // This would be used to create a prompt for an AI to generate a texture
-        // Based on the chunk location and terrain type
-        const worldX = chunkX * this.chunkSize;
-        const worldZ = chunkZ * this.chunkSize;
-        
-        // Sample height to determine terrain type
-        const height = this.noiseGenerator.getHeightAt(worldX, worldZ);
-        const normalizedHeight = (height - this.noiseGenerator.minHeight) / 
-                              (this.noiseGenerator.maxHeight - this.noiseGenerator.minHeight);
-        
-        let terrainType = "grass";
-        if (normalizedHeight < 0.3) {
-            terrainType = "sand";
-        } else if (normalizedHeight > 0.7) {
-            terrainType = "rocky";
-        }
-        
-        return `Generate a seamless ${terrainType} terrain texture for a video game. The texture should have a resolution of 256x256 pixels and use natural colors.`;
-    }
-    
     generateFallbackTexture() {
         // Create a simple procedural texture as fallback
         const canvas = document.createElement('canvas');
@@ -334,4 +390,3 @@ export class TerrainChunkManager {
         return texture;
     }
 }
-
