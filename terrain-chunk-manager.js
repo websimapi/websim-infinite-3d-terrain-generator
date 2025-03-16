@@ -149,58 +149,69 @@ export class TerrainChunkManager {
     }
     
     async getChunkTexture(chunkX, chunkZ) {
-        // Determine the terrain type based on height
-        const terrainType = this.determineTerrainType(chunkX, chunkZ);
+        // Use the AI to generate a texture based on the chunk location and terrain type
+        const prompt = this.generateTexturePrompt(chunkX, chunkZ);
         
         try {
-            // Generate a texture using AI
-            const prompt = this.generateTexturePrompt(chunkX, chunkZ);
-            console.log("Generating texture with prompt:", prompt);
+            // Generate an AI image texture for the terrain
+            const imageUrl = await this.generateAIImage(prompt);
             
-            const result = await websim.imageGen({
-                prompt: prompt,
-                aspect_ratio: "1:1",
-                seed: (chunkX * 13 + chunkZ * 17) % 1000
-            });
-            
-            if (result && result.url) {
-                console.log("Successfully generated image:", result.url);
-                return await this.loadTextureFromUrl(result.url, terrainType);
+            if (imageUrl) {
+                return this.loadTextureFromUrl(imageUrl);
             } else {
-                console.warn("No URL returned from image generation");
-                return this.createTerrainTexture(terrainType, chunkX * this.chunkSize, chunkZ * this.chunkSize);
+                return this.createTerrainTexture(this.determineTerrainType(chunkX, chunkZ), chunkX * this.chunkSize, chunkZ * this.chunkSize);
             }
         } catch (error) {
-            console.error("Error in texture generation:", error);
-            return this.createTerrainTexture(terrainType, chunkX * this.chunkSize, chunkZ * this.chunkSize);
+            // Fallback texture if the AI generation fails
+            console.error("Error generating texture:", error);
+            return this.createTerrainTexture(this.determineTerrainType(chunkX, chunkZ), chunkX * this.chunkSize, chunkZ * this.chunkSize);
         }
     }
     
-    async loadTextureFromUrl(url, terrainType) {
-        return new Promise((resolve) => {
-            const textureLoader = new THREE.TextureLoader();
-            textureLoader.crossOrigin = 'anonymous';
+    async generateAIImage(prompt) {
+        try {
+            // Use the LLM to generate an image
+            const result = await websim.imageGen({
+                prompt: prompt,
+                aspect_ratio: "1:1",
+                seed: Math.floor(Math.random() * 1000)
+            });
             
-            // Use CORS proxy
+            return result.url;
+        } catch (error) {
+            console.error("Error generating AI image:", error);
+            return null;
+        }
+    }
+    
+    async loadTextureFromUrl(url) {
+        try {
+            // Use a CORS proxy to avoid cross-origin issues
             const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-            console.log("Loading texture from:", proxyUrl);
             
-            textureLoader.load(
-                proxyUrl,
-                (texture) => {
-                    console.log("Texture loaded successfully");
-                    texture.wrapS = THREE.RepeatWrapping;
-                    texture.wrapT = THREE.RepeatWrapping;
-                    resolve(texture);
-                },
-                undefined,
-                (error) => {
-                    console.error('Error loading texture:', error);
-                    // Fallback to procedural texture if loading fails
-                    resolve(this.createTerrainTexture(terrainType, 0, 0));
-                }
-            );
-        });
+            return new Promise((resolve, reject) => {
+                const textureLoader = new THREE.TextureLoader();
+                textureLoader.crossOrigin = 'anonymous';
+                
+                textureLoader.load(
+                    proxyUrl,
+                    (texture) => {
+                        texture.wrapS = THREE.RepeatWrapping;
+                        texture.wrapT = THREE.RepeatWrapping;
+                        resolve(texture);
+                    },
+                    undefined,
+                    (error) => {
+                        console.error('Error loading texture:', error);
+                        // Fallback to procedural texture
+                        resolve(this.generateFallbackTexture());
+                    }
+                );
+            });
+        } catch (error) {
+            console.error("Error loading texture:", error);
+            return this.generateFallbackTexture();
+        }
     }
     
     determineTerrainType(chunkX, chunkZ) {
@@ -227,21 +238,27 @@ export class TerrainChunkManager {
     
     generateTexturePrompt(chunkX, chunkZ) {
         // This creates a prompt for an AI to generate a texture
+        // Based on the chunk location and terrain type
         const terrainType = this.determineTerrainType(chunkX, chunkZ);
         
-        // Create a detailed prompt that will work well with image generation
+        // Create a more detailed prompt based on terrain type
         let prompt = "";
         
         if (terrainType === 'sand') {
-            prompt = `A seamless top-down sand texture pattern for a video game, tileable, detailed, game asset`;
+            prompt = `A top-down seamless sand texture with some small rocks and subtle ripples. Light tan color with natural variations.`;
         } else if (terrainType === 'grass') {
-            prompt = `A seamless top-down grass texture pattern for a video game, tileable, detailed, game asset`;
+            prompt = `A top-down seamless grass texture with small flowers and varying shades of green. Natural ground cover texture from above.`;
         } else if (terrainType === 'rock') {
-            prompt = `A seamless top-down rock and stone texture pattern for a video game, tileable, detailed, game asset`;
+            prompt = `A top-down seamless rocky mountain terrain texture with cracks and variations in gray stone. Natural mountainous surface from above.`;
         }
         
-        // Add some consistency to the prompt
-        prompt += ", overhead view, no shadows, flat lighting, texture only";
+        // Add some randomization based on chunk coordinates
+        const seed = (chunkX * 13 + chunkZ * 17) % 5;
+        if (seed === 0) prompt += " More densely packed.";
+        if (seed === 1) prompt += " More sparse pattern.";
+        if (seed === 2) prompt += " Slightly darker shades.";
+        if (seed === 3) prompt += " Slightly lighter shades.";
+        if (seed === 4) prompt += " With more color variations.";
         
         return prompt;
     }
