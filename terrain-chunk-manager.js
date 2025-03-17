@@ -106,7 +106,13 @@ export class TerrainChunkManager {
         const worldZ = chunkZ * this.chunkSize;
         
         // Try to load chunk data from database first
-        let savedChunkData = await this.worldDB.getChunk(chunkId);
+        let savedChunkData = null;
+        try {
+            savedChunkData = await this.worldDB.getChunk(chunkId);
+        } catch (error) {
+            console.warn(`Failed to load chunk data for ${chunkId}:`, error);
+        }
+        
         let texture;
         
         if (savedChunkData && savedChunkData.textureUrl) {

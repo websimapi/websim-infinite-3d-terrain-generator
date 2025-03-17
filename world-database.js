@@ -67,22 +67,13 @@ export class WorldDatabase {
         }
         
         return new Promise((resolve, reject) => {
-            // Check if database is null
-            if (!this.db) {
-                console.warn('Database not initialized, using in-memory fallback');
-                this.inMemoryFallback = true;
-                this.chunkCache = this.chunkCache || new Map();
-                resolve(null);
-                return;
-            }
-            
             const transaction = this.db.transaction([this.chunkStoreName], 'readonly');
             const chunkStore = transaction.objectStore(this.chunkStoreName);
             
             const request = chunkStore.get(chunkId);
             
             request.onsuccess = (event) => {
-                resolve(event.target.result);
+                resolve(event.target.result || null);
             };
             
             request.onerror = (event) => {
