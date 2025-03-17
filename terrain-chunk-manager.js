@@ -70,7 +70,7 @@ export class TerrainChunkManager {
             }
         }
         
-        // Load new chunks (with a small delay between each to avoid freezing)
+        // Load new chunks one at a time with 7 seconds between each
         this.loadingProgress = 0;
         const totalChunks = chunksToLoad.length;
         
@@ -78,26 +78,80 @@ export class TerrainChunkManager {
             const loadingProgressElement = document.getElementById('loading-progress');
             const loadingElement = document.getElementById('loading');
             
-            if (totalChunks > 5) {
+            if (totalChunks > 1) {
                 loadingElement.style.display = 'flex';
             }
             
-            chunksToLoad.forEach((chunk, index) => {
-                setTimeout(() => {
-                    this.createChunk(chunk.x, chunk.z, chunk.id);
+            // Load chunks sequentially instead of with small delays between each
+            this.loadChunksSequentially(chunksToLoad, 0, totalChunks, loadingProgressElement, loadingElement);
+        }
+    }
+    
+    loadChunksSequentially(chunksToLoad, currentIndex, totalChunks, loadingProgressElement, loadingElement) {
+        if (currentIndex >= chunksToLoad.length) {
+            // All chunks loaded
+            loadingElement.style.display = 'none';
+            return;
+        }
+        
+        const chunk = chunksToLoad[currentIndex];
+        
+        // Create the chunk
+        this.createChunk(chunk.x, chunk.z, chunk.id).then(() => {
+            this.loadingProgress++;
+            
+            if (loadingProgressElement) {
+                const progress = Math.floor((this.loadingProgress / totalChunks) * 100);
+                loadingProgressElement.style.width = `${progress}%`;
+            }
+            
+            // Schedule the next chunk after 7 seconds
+            setTimeout(() => {
+                this.loadChunksSequentially(
+                    chunksToLoad, 
+                    currentIndex + 1, 
+                    totalChunks, 
+                    loadingProgressElement, 
+                    loadingElement
+                );
+            }, 7000); // 7 seconds between each chunk
+        }).catch(error => {
+            console.error(`Failed to load chunk ${chunk.id}:`, error);
+            // Retry this chunk once more before moving on
+            setTimeout(() => {
+                this.createChunk(chunk.x, chunk.z, chunk.id).then(() => {
                     this.loadingProgress++;
-                    
                     if (loadingProgressElement) {
                         const progress = Math.floor((this.loadingProgress / totalChunks) * 100);
                         loadingProgressElement.style.width = `${progress}%`;
-                        
-                        if (this.loadingProgress === totalChunks) {
-                            loadingElement.style.display = 'none';
-                        }
                     }
-                }, index * 50);
-            });
-        }
+                    
+                    // Continue to next chunk after 7 seconds
+                    setTimeout(() => {
+                        this.loadChunksSequentially(
+                            chunksToLoad, 
+                            currentIndex + 1, 
+                            totalChunks, 
+                            loadingProgressElement, 
+                            loadingElement
+                        );
+                    }, 7000);
+                }).catch(error => {
+                    console.error(`Failed to load chunk ${chunk.id} on retry:`, error);
+                    this.loadingProgress++;
+                    // Continue to next chunk anyway after 7 seconds
+                    setTimeout(() => {
+                        this.loadChunksSequentially(
+                            chunksToLoad, 
+                            currentIndex + 1, 
+                            totalChunks, 
+                            loadingProgressElement, 
+                            loadingElement
+                        );
+                    }, 7000);
+                });
+            }, 2000); // Retry after 2 seconds
+        });
     }
     
     async createChunk(chunkX, chunkZ, chunkId) {
@@ -106,13 +160,7 @@ export class TerrainChunkManager {
         const worldZ = chunkZ * this.chunkSize;
         
         // Try to load chunk data from database first
-        let savedChunkData = null;
-        try {
-            savedChunkData = await this.worldDB.getChunk(chunkId);
-        } catch (error) {
-            console.warn(`Failed to load chunk data for ${chunkId}:`, error);
-        }
-        
+        let savedChunkData = await this.worldDB.getChunk(chunkId);
         let texture;
         
         if (savedChunkData && savedChunkData.textureUrl) {
@@ -221,7 +269,10 @@ export class TerrainChunkManager {
                     texture.wrapT = THREE.RepeatWrapping;
                     resolve(texture);
                 },
-                undefined,
+                // Add progress callback to track loading
+                (xhr) => {
+                    console.log(`Texture ${url} loading: ${Math.round(xhr.loaded / xhr.total * 100)}%`);
+                },
                 (error) => {
                     console.warn(`Direct texture loading failed (attempt ${retryCount + 1}/${this.textureRetryCount + 1}):`, error);
                     if (retryCount < this.textureRetryCount) {

@@ -67,19 +67,36 @@ export class WorldDatabase {
         }
         
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction([this.chunkStoreName], 'readonly');
-            const chunkStore = transaction.objectStore(this.chunkStoreName);
+            // Check if database is null or not initialized
+            if (!this.db) {
+                console.warn('Database not initialized, using in-memory fallback');
+                this.inMemoryFallback = true;
+                this.chunkCache = this.chunkCache || new Map();
+                resolve(null);
+                return;
+            }
             
-            const request = chunkStore.get(chunkId);
-            
-            request.onsuccess = (event) => {
-                resolve(event.target.result || null);
-            };
-            
-            request.onerror = (event) => {
-                console.error('Error getting chunk:', event.target.error);
-                reject(event.target.error);
-            };
+            try {
+                const transaction = this.db.transaction([this.chunkStoreName], 'readonly');
+                const chunkStore = transaction.objectStore(this.chunkStoreName);
+                
+                const request = chunkStore.get(chunkId);
+                
+                request.onsuccess = (event) => {
+                    resolve(event.target.result || null);
+                };
+                
+                request.onerror = (event) => {
+                    console.error('Error getting chunk:', event.target.error);
+                    reject(event.target.error);
+                };
+            } catch (error) {
+                console.error('Exception during database access:', error);
+                // Fall back to in-memory if there's an error
+                this.inMemoryFallback = true;
+                this.chunkCache = this.chunkCache || new Map();
+                resolve(null);
+            }
         });
     }
     
