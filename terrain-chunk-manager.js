@@ -150,48 +150,82 @@ export class TerrainChunkManager {
     
     async getChunkTexture(chunkX, chunkZ) {
         // Use the AI to generate a texture based on the chunk location and terrain type
-        const prompt = this.generateTexturePrompt(chunkX, chunkZ);
-        
         try {
-            // Generate an AI image texture for the terrain
-            const imageUrl = await this.generateAIImage(prompt);
+            // Generate a text description first
+            const prompt = this.generateTexturePrompt(chunkX, chunkZ);
             
-            if (imageUrl) {
-                return this.loadTextureFromUrl(imageUrl);
-            } else {
-                return this.createTerrainTexture(this.determineTerrainType(chunkX, chunkZ), chunkX * this.chunkSize, chunkZ * this.chunkSize);
-            }
+            // Use the text description to generate an image
+            const imageUrl = await this.generateTextureImage(prompt);
+            
+            // Create a texture from the generated image
+            return this.loadTextureFromUrl(imageUrl);
         } catch (error) {
-            // Fallback texture if the AI generation fails
             console.error("Error generating texture:", error);
-            return this.createTerrainTexture(this.determineTerrainType(chunkX, chunkZ), chunkX * this.chunkSize, chunkZ * this.chunkSize);
+            return this.generateFallbackTexture();
         }
     }
     
-    async generateAIImage(prompt) {
+    async generateTextureImage(prompt) {
         try {
-            // Use the LLM to generate an image
+            // Use the LLM to generate an image based on the prompt
             const result = await websim.imageGen({
                 prompt: prompt,
-                aspect_ratio: "1:1",
-                seed: Math.floor(Math.random() * 1000)
+                width: 512,
+                height: 512,
             });
             
             return result.url;
         } catch (error) {
-            console.error("Error generating AI image:", error);
-            return null;
+            console.error("Error generating image with AI:", error);
+            throw error;
         }
     }
     
     async loadTextureFromUrl(url) {
-        try {
-            // Use a CORS proxy to avoid cross-origin issues
-            const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+        return new Promise((resolve, reject) => {
+            // Use the Three.js texture loader
+            const textureLoader = new THREE.TextureLoader();
             
-            return new Promise((resolve, reject) => {
+            // Try loading the texture directly first
+            textureLoader.load(
+                url,
+                (texture) => {
+                    texture.wrapS = THREE.RepeatWrapping;
+                    texture.wrapT = THREE.RepeatWrapping;
+                    resolve(texture);
+                },
+                undefined,
+                (error) => {
+                    console.warn("Direct texture loading failed, trying with CORS proxy:", error);
+                    this.loadTextureWithProxy(url)
+                        .then(resolve)
+                        .catch(reject);
+                }
+            );
+        });
+    }
+    
+    async loadTextureWithProxy(url) {
+        return new Promise((resolve, reject) => {
+            // List of CORS proxies to try in order
+            const proxies = [
+                "https://corsproxy.io/",
+                "https://proxy.cors.sh/",
+                "https://cors-proxy.htmldriven.com/?url=",
+                "https://thingproxy.freeboard.io/fetch/",
+                "https://api.allorigins.win/get?url=",
+                "https://api.codetabs.com/v1/proxy?quest="
+            ];
+            
+            // Try each proxy until one works
+            const tryProxyAtIndex = (index) => {
+                if (index >= proxies.length) {
+                    reject(new Error("All proxies failed"));
+                    return;
+                }
+                
+                const proxyUrl = proxies[index] + encodeURIComponent(url);
                 const textureLoader = new THREE.TextureLoader();
-                textureLoader.crossOrigin = 'anonymous';
                 
                 textureLoader.load(
                     proxyUrl,
@@ -201,163 +235,58 @@ export class TerrainChunkManager {
                         resolve(texture);
                     },
                     undefined,
-                    (error) => {
-                        console.error('Error loading texture:', error);
-                        // Fallback to procedural texture
-                        resolve(this.generateFallbackTexture());
+                    () => {
+                        console.warn(`Proxy ${proxies[index]} failed, trying next...`);
+                        tryProxyAtIndex(index + 1);
                     }
                 );
-            });
-        } catch (error) {
-            console.error("Error loading texture:", error);
-            return this.generateFallbackTexture();
-        }
+            };
+            
+            tryProxyAtIndex(0);
+        });
     }
     
-    determineTerrainType(chunkX, chunkZ) {
-        // Sample heights to determine terrain type
+    generateTexturePrompt(chunkX, chunkZ) {
+        // Sample several points in the chunk to determine terrain type and features
         const worldX = chunkX * this.chunkSize;
         const worldZ = chunkZ * this.chunkSize;
         
-        // Sample height at the center of the chunk
+        // Sample heights at different points in the chunk
         const center = this.noiseGenerator.getHeightAt(worldX + this.chunkSize/2, worldZ + this.chunkSize/2);
         const minHeight = this.noiseGenerator.minHeight;
         const maxHeight = this.noiseGenerator.maxHeight;
         const heightRange = maxHeight - minHeight;
+        const normalizedHeight = (center - minHeight) / heightRange;
         
-        // Determine primary terrain type
-        let terrainType = 'grass';
-        if (center < minHeight + heightRange * 0.3) {
-            terrainType = 'sand';
-        } else if (center > minHeight + heightRange * 0.7) {
-            terrainType = 'rock';
+        // Determine primary terrain type based on height
+        let terrainType = "lush green grassland";
+        let additionalFeatures = "";
+        
+        if (normalizedHeight < 0.2) {
+            terrainType = "sandy beach";
+            additionalFeatures = "with scattered shells and pebbles";
+        } else if (normalizedHeight < 0.3) {
+            terrainType = "coastal sand";
+            additionalFeatures = "with patches of dry grass";
+        } else if (normalizedHeight < 0.4) {
+            terrainType = "grassy plains";
+            additionalFeatures = "with wildflowers and tall grass";
+        } else if (normalizedHeight < 0.6) {
+            terrainType = "forest floor";
+            additionalFeatures = "with fallen leaves, moss patches and small plants";
+        } else if (normalizedHeight < 0.75) {
+            terrainType = "rocky mountainside";
+            additionalFeatures = "with sparse vegetation and exposed stone";
+        } else if (normalizedHeight < 0.9) {
+            terrainType = "alpine rocky terrain";
+            additionalFeatures = "with snow patches and small hardy plants";
+        } else {
+            terrainType = "snowy mountain peak";
+            additionalFeatures = "with ice crystals and bare rock outcrops";
         }
         
-        return terrainType;
-    }
-    
-    generateTexturePrompt(chunkX, chunkZ) {
-        // This creates a prompt for an AI to generate a texture
-        // Based on the chunk location and terrain type
-        const terrainType = this.determineTerrainType(chunkX, chunkZ);
-        
-        // Create a more detailed prompt based on terrain type
-        let prompt = "";
-        
-        if (terrainType === 'sand') {
-            prompt = `A top-down seamless sand texture with some small rocks and subtle ripples. Light tan color with natural variations.`;
-        } else if (terrainType === 'grass') {
-            prompt = `A top-down seamless grass texture with small flowers and varying shades of green. Natural ground cover texture from above.`;
-        } else if (terrainType === 'rock') {
-            prompt = `A top-down seamless rocky mountain terrain texture with cracks and variations in gray stone. Natural mountainous surface from above.`;
-        }
-        
-        // Add some randomization based on chunk coordinates
-        const seed = (chunkX * 13 + chunkZ * 17) % 5;
-        if (seed === 0) prompt += " More densely packed.";
-        if (seed === 1) prompt += " More sparse pattern.";
-        if (seed === 2) prompt += " Slightly darker shades.";
-        if (seed === 3) prompt += " Slightly lighter shades.";
-        if (seed === 4) prompt += " With more color variations.";
-        
-        return prompt;
-    }
-    
-    createTerrainTexture(terrainType, worldX, worldZ) {
-        const canvas = document.createElement('canvas');
-        canvas.width = 256;
-        canvas.height = 256;
-        const ctx = canvas.getContext('2d');
-        
-        // Base colors for different terrain types
-        const terrainColors = {
-            sand: { base: '#E2C799', dark: '#C7A76C', light: '#F7E4C5' },
-            grass: { base: '#549154', dark: '#3D7E3D', light: '#87C387' },
-            rock: { base: '#888888', dark: '#5E5E5E', light: '#A1A1A1' }
-        };
-        
-        const colors = terrainColors[terrainType];
-        
-        // Fill with base color
-        ctx.fillStyle = colors.base;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
-        // Add noise patterns specific to the terrain type
-        this.addNoiseToTexture(ctx, colors, terrainType, worldX, worldZ);
-        
-        // Create Three.js texture from canvas
-        const texture = new THREE.CanvasTexture(canvas);
-        texture.wrapS = THREE.RepeatWrapping;
-        texture.wrapT = THREE.RepeatWrapping;
-        
-        return texture;
-    }
-    
-    addNoiseToTexture(ctx, colors, terrainType, worldX, worldZ) {
-        const width = ctx.canvas.width;
-        const height = ctx.canvas.height;
-        
-        // Use a smaller scale for the texture noise than the terrain noise
-        const noiseScale = 0.03;
-        
-        // Add different noise patterns based on terrain type
-        for (let x = 0; x < width; x += 2) {
-            for (let y = 0; y < height; y += 2) {
-                // Get noise value (using a different seed than the terrain height)
-                const nx = (x / width + worldX * 0.01) * noiseScale;
-                const ny = (y / height + worldZ * 0.01) * noiseScale;
-                const noise = this.noiseGenerator.getNoise(nx, ny, 999) * 0.5 + 0.5;
-                
-                // Apply different patterns based on terrain type
-                if (terrainType === 'sand') {
-                    // Sand has smooth ripples
-                    const ripples = Math.sin(nx * 100) * Math.sin(ny * 100) * 0.5 + 0.5;
-                    const combined = noise * 0.7 + ripples * 0.3;
-                    
-                    ctx.fillStyle = this.lerpColor(colors.dark, colors.light, combined);
-                    ctx.fillRect(x, y, 2, 2);
-                } 
-                else if (terrainType === 'grass') {
-                    // Grass has small speckles and variations
-                    const variation = Math.sin(nx * 50) * Math.cos(ny * 50) * 0.5 + 0.5;
-                    const combined = noise * 0.6 + variation * 0.4;
-                    
-                    ctx.fillStyle = this.lerpColor(colors.dark, colors.light, combined);
-                    ctx.fillRect(x, y, 2, 2);
-                    
-                    // Add occasional grass blade spots
-                    if (noise > 0.7 && Math.random() > 0.95) {
-                        ctx.fillStyle = colors.light;
-                        ctx.fillRect(x, y, 2, 2);
-                    }
-                } 
-                else if (terrainType === 'rock') {
-                    // Rock has rough, sharp transitions
-                    const sharpNoise = noise > 0.5 ? 0.8 : 0.2;
-                    const cracks = Math.sin(nx * 200) * Math.sin(ny * 200) > 0.85 ? 0.1 : 0.6;
-                    const combined = sharpNoise * 0.7 + cracks * 0.3;
-                    
-                    ctx.fillStyle = this.lerpColor(colors.dark, colors.light, combined);
-                    ctx.fillRect(x, y, 2, 2);
-                }
-            }
-        }
-    }
-    
-    lerpColor(color1, color2, amount) {
-        const r1 = parseInt(color1.substring(1, 3), 16);
-        const g1 = parseInt(color1.substring(3, 5), 16);
-        const b1 = parseInt(color1.substring(5, 7), 16);
-        
-        const r2 = parseInt(color2.substring(1, 3), 16);
-        const g2 = parseInt(color2.substring(3, 5), 16);
-        const b2 = parseInt(color2.substring(5, 7), 16);
-        
-        const r = Math.round(r1 + (r2 - r1) * amount);
-        const g = Math.round(g1 + (g2 - g1) * amount);
-        const b = Math.round(b1 + (b2 - b1) * amount);
-        
-        return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+        // Create a detailed prompt
+        return `A seamless top-down texture of ${terrainType} ${additionalFeatures}. Natural colors, realistic, detailed, for a video game terrain. No text. Tile-able pattern.`;
     }
     
     generateFallbackTexture() {

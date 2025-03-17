@@ -35,6 +35,9 @@ class App {
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         document.body.appendChild(this.renderer.domElement);
         
+        // Enable cross-origin texture loading
+        THREE.ImageUtils.crossOrigin = 'anonymous';
+        
         this.clock = new THREE.Clock();
         this.moveForward = false;
         this.moveBackward = false;
@@ -201,4 +204,3 @@ class App {
 window.addEventListener('load', () => {
     new App();
 });
-
