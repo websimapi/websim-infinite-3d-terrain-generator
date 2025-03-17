@@ -9,9 +9,6 @@ export class NoiseGenerator {
         this.minHeight = -100;
         this.maxHeight = 400;
         
-        // Unique identifier for this terrain configuration
-        this.terrainId = `terrain_${this.seed}_${Date.now()}`;
-        
         // Constants for improved Perlin noise
         this.permutation = this.generatePermutationTable();
         this.gradients = this.generateGradients();
@@ -230,3 +227,4 @@ export class NoiseGenerator {
         };
     }
 }
+
