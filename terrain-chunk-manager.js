@@ -17,6 +17,9 @@ export class TerrainChunkManager {
         this.loadingProgress = 0;
         this.totalChunksToLoad = Math.pow((this.loadDistance * 2) + 1, 2);
         
+        // Database connection
+        this.room = new WebsimSocket();
+        
         // Initialize chunks around camera position
         this.lastCameraChunkPosition = new THREE.Vector2(
             Infinity, Infinity
@@ -98,13 +101,62 @@ export class TerrainChunkManager {
         }
     }
     
-    createChunk(chunkX, chunkZ, chunkId) {
+    async createChunk(chunkX, chunkZ, chunkId) {
         // Define the world position of the chunk
         const worldX = chunkX * this.chunkSize;
         const worldZ = chunkZ * this.chunkSize;
         
-        // Get texture for this chunk
-        this.getChunkTexture(chunkX, chunkZ).then(texture => {
+        try {
+            // Check if chunk data exists in database
+            const existingChunks = this.room.collection('terrain_chunks')
+                .filter({ 
+                    terrainId: this.noiseGenerator.terrainId,
+                    chunkId: chunkId 
+                })
+                .getList();
+                
+            let texture;
+            let retryCount = 0;
+            const maxRetries = 3;
+            
+            if (existingChunks && existingChunks.length > 0) {
+                // Use texture from database
+                console.log(`Loading chunk ${chunkId} from database`);
+                texture = await this.loadTextureFromUrl(existingChunks[0].textureUrl);
+            } else {
+                // Generate new texture with retry logic
+                while (!texture && retryCount < maxRetries) {
+                    try {
+                        // Generate texture for this chunk
+                        texture = await this.getChunkTexture(chunkX, chunkZ);
+                        
+                        // Save successful texture to database
+                        if (texture && texture.image) {
+                            const textureUrl = texture.image.src;
+                            await this.room.collection('terrain_chunks').create({
+                                terrainId: this.noiseGenerator.terrainId,
+                                chunkId: chunkId,
+                                chunkX: chunkX,
+                                chunkZ: chunkZ,
+                                textureUrl: textureUrl
+                            });
+                        }
+                    } catch (error) {
+                        console.warn(`Texture generation attempt ${retryCount + 1} failed for chunk ${chunkId}:`, error);
+                        retryCount++;
+                        
+                        // Wait a bit before retrying
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                    }
+                }
+                
+                // Use fallback texture if all retries failed
+                if (!texture) {
+                    console.error(`All texture generation attempts failed for chunk ${chunkId}, using fallback`);
+                    texture = this.generateFallbackTexture();
+                }
+            }
+            
             // Create terrain geometry
             const geometry = new THREE.PlaneGeometry(
                 this.chunkSize, 
@@ -145,7 +197,58 @@ export class TerrainChunkManager {
             // Add to scene and store in chunks map
             this.scene.add(mesh);
             this.chunks.set(chunkId, mesh);
+        } catch (error) {
+            console.error(`Error creating chunk ${chunkId}:`, error);
+            // Create a fallback chunk with basic texture
+            this.createFallbackChunk(chunkX, chunkZ, chunkId);
+        }
+    }
+    
+    createFallbackChunk(chunkX, chunkZ, chunkId) {
+        // Define the world position of the chunk
+        const worldX = chunkX * this.chunkSize;
+        const worldZ = chunkZ * this.chunkSize;
+        
+        // Create terrain geometry
+        const geometry = new THREE.PlaneGeometry(
+            this.chunkSize, 
+            this.chunkSize, 
+            this.chunkResolution - 1, 
+            this.chunkResolution - 1
+        );
+        
+        // Rotate to be horizontal
+        geometry.rotateX(-Math.PI / 2);
+        
+        // Apply height to each vertex based on noise
+        const vertices = geometry.attributes.position.array;
+        for (let i = 0; i < vertices.length; i += 3) {
+            const x = vertices[i] + worldX;
+            const z = vertices[i + 2] + worldZ;
+            
+            vertices[i + 1] = this.noiseGenerator.getHeightAt(x, z);
+        }
+        
+        // Update geometry
+        geometry.computeVertexNormals();
+        
+        // Create material with fallback texture
+        const material = new THREE.MeshStandardMaterial({
+            map: this.generateFallbackTexture(),
+            roughness: 0.8,
+            metalness: 0.2,
+            receiveShadow: true
         });
+        
+        // Create mesh
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.position.set(worldX, 0, worldZ);
+        
+        // Add to scene and store in chunks map
+        this.scene.add(mesh);
+        this.chunks.set(chunkId, mesh);
     }
     
     async getChunkTexture(chunkX, chunkZ) {
@@ -185,23 +288,40 @@ export class TerrainChunkManager {
         return new Promise((resolve, reject) => {
             // Use the Three.js texture loader
             const textureLoader = new THREE.TextureLoader();
+            let attempts = 0;
+            const maxAttempts = 3;
             
-            // Try loading the texture directly first
-            textureLoader.load(
-                url,
-                (texture) => {
-                    texture.wrapS = THREE.RepeatWrapping;
-                    texture.wrapT = THREE.RepeatWrapping;
-                    resolve(texture);
-                },
-                undefined,
-                (error) => {
-                    console.warn("Direct texture loading failed, trying with CORS proxy:", error);
-                    this.loadTextureWithProxy(url)
-                        .then(resolve)
-                        .catch(reject);
-                }
-            );
+            const attemptLoad = () => {
+                attempts++;
+                
+                // Try loading the texture directly
+                textureLoader.load(
+                    url,
+                    (texture) => {
+                        texture.wrapS = THREE.RepeatWrapping;
+                        texture.wrapT = THREE.RepeatWrapping;
+                        resolve(texture);
+                    },
+                    undefined,
+                    (error) => {
+                        console.warn(`Direct texture loading failed (attempt ${attempts}/${maxAttempts}):`, error);
+                        
+                        if (attempts < maxAttempts) {
+                            setTimeout(attemptLoad, 1000); // Wait before retrying
+                        } else {
+                            console.warn("All direct attempts failed, trying with CORS proxy");
+                            this.loadTextureWithProxy(url)
+                                .then(resolve)
+                                .catch(() => {
+                                    console.error("All texture loading methods failed, using fallback");
+                                    resolve(this.generateFallbackTexture());
+                                });
+                        }
+                    }
+                );
+            };
+            
+            attemptLoad();
         });
     }
     
@@ -220,7 +340,8 @@ export class TerrainChunkManager {
             // Try each proxy until one works
             const tryProxyAtIndex = (index) => {
                 if (index >= proxies.length) {
-                    reject(new Error("All proxies failed"));
+                    console.error("All proxies failed, using fallback texture");
+                    resolve(this.generateFallbackTexture());
                     return;
                 }
                 

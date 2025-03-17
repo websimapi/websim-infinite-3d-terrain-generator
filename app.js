@@ -2,9 +2,11 @@ import * as THREE from 'three';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { TerrainChunkManager } from './terrain-chunk-manager.js';
 import { NoiseGenerator } from './noise-generator.js';
+import { WebsimSocket } from './websim-socket.js';
 
 class App {
     constructor() {
+        this.room = new WebsimSocket();
         this.initialize();
         this.setupEvents();
         this.createScene();
@@ -13,6 +15,7 @@ class App {
         this.createControls();
         this.createTerrain();
         this.setupMovementControls();
+        this.setupMultiplayer();
         
         // Start animation loop
         this.animate();
@@ -151,6 +154,78 @@ class App {
         
         document.addEventListener('keydown', onKeyDown);
         document.addEventListener('keyup', onKeyUp);
+    }
+    
+    setupMultiplayer() {
+        // Share player position
+        setInterval(() => {
+            if (this.controls && this.controls.isLocked) {
+                const position = this.controls.getObject().position;
+                this.room.party.updatePresence({
+                    x: position.x,
+                    y: position.y,
+                    z: position.z,
+                    rotation: this.camera.rotation.y
+                });
+            }
+        }, 100);
+        
+        // Handle other players
+        this.otherPlayers = {};
+        
+        this.room.party.subscribePresence((presence) => {
+            for (const clientId in presence) {
+                // Skip if it's our own presence
+                if (clientId === this.room.party.client.id) continue;
+                
+                const presenceData = presence[clientId];
+                
+                // Create or update other player representation
+                if (presenceData.x !== undefined) {
+                    this.updateOtherPlayer(clientId, presenceData);
+                }
+            }
+            
+            // Remove players who are no longer present
+            for (const clientId in this.otherPlayers) {
+                if (!presence[clientId]) {
+                    this.removeOtherPlayer(clientId);
+                }
+            }
+        });
+    }
+    
+    updateOtherPlayer(clientId, presenceData) {
+        // Create player if it doesn't exist
+        if (!this.otherPlayers[clientId]) {
+            // Create a simple player representation
+            const geometry = new THREE.CapsuleGeometry(1, 3, 4, 8);
+            const material = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
+            const player = new THREE.Mesh(geometry, material);
+            
+            player.castShadow = true;
+            player.receiveShadow = true;
+            
+            // Add to scene
+            this.scene.add(player);
+            this.otherPlayers[clientId] = player;
+        }
+        
+        // Update position and rotation
+        const player = this.otherPlayers[clientId];
+        player.position.set(presenceData.x, presenceData.y, presenceData.z);
+        
+        if (presenceData.rotation !== undefined) {
+            player.rotation.y = presenceData.rotation;
+        }
+    }
+    
+    removeOtherPlayer(clientId) {
+        // Remove player from scene
+        if (this.otherPlayers[clientId]) {
+            this.scene.remove(this.otherPlayers[clientId]);
+            delete this.otherPlayers[clientId];
+        }
     }
     
     updatePosition() {
